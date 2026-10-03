@@ -6,16 +6,20 @@
 #   ./scripts/unpack-rar.sh "/srv/media/disk1/Det siste nye"
 #   ./scripts/unpack-rar.sh --slett-rar "/srv/media/disk1/Det siste nye"
 #
-# --slett-rar sletter RAR-filene i en mappe etter at den er pakket ut uten feil.
+# --slett-rar      sletter RAR-filene i en mappe etter at den er pakket ut uten feil.
+# --min-alder N    hopper over mapper der noe er endret de siste N minuttene (lastes ned).
 set -euo pipefail
 
-delete=0
-if [[ ${1:-} == --slett-rar ]]; then
-  delete=1
-  shift
-fi
+delete=0 min_age=0
+while [[ ${1:-} == --* ]]; do
+  case $1 in
+    --slett-rar) delete=1; shift ;;
+    --min-alder) min_age=$2; shift 2 ;;
+    *) echo "Ukjent valg: $1" >&2; exit 1 ;;
+  esac
+done
 if [[ $# -lt 1 ]]; then
-  echo "Bruk: $0 [--slett-rar] <mappe> …" >&2
+  echo "Bruk: $0 [--slett-rar] [--min-alder MINUTTER] <mappe> …" >&2
   exit 1
 fi
 if ! command -v unrar >/dev/null; then
@@ -47,6 +51,10 @@ for top in "$@"; do
       first=$(find "$dir" -maxdepth 1 -type f -iname '*.rar' ! -iregex '.*\.part[0-9]+\.rar' | sort | head -n1)
     fi
     [[ -n $first ]] || continue
+    if ((min_age)) && [[ -n $(find "$dir" -type f -mmin "-$min_age" -print -quit) ]]; then
+      echo "  venter (endret nylig): $name"
+      continue
+    fi
 
     videos=$(list_videos "$first")
     if [[ -z $videos ]]; then

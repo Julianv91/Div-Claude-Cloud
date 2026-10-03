@@ -193,6 +193,19 @@ du kjøre *Kontrollpanel → Biblioteker → Skann alle biblioteker*.
   din eierskap: `sudo chown -R $USER: /srv/media/disk1`. Skriptet advarer om dette.
 - Jellyfin selv har bare lesetilgang til diskene, så den kan aldri slette filmene dine.
 
+## 8. (Valgfritt) Automatisk innboks for nye nedlastinger
+
+```bash
+sudo ./scripts/setup-autosort.sh
+```
+
+Lager en `Innboks`-mappe på hver disk (`\\<server-ip>\media\disk1\Innboks`) og en
+tidsstyrt jobb som hvert 15. minutt pakker ut RAR-filer og sorterer det som ligger der inn i
+`Filmer/` og `Serier/`. Ting som er endret de siste 30 minuttene får ligge til neste runde,
+så nedlastinger som pågår ikke flyttes. Det som ikke gjenkjennes, blir liggende i innboksen.
+
+Se hva den har gjort: `journalctl -u mediaserver-autosort -n 50`
+
 ## Navngivning av filer
 
 Jellyfin finner riktig film/serie lettest med denne strukturen:

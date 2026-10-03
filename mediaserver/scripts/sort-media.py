@@ -18,6 +18,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
@@ -123,6 +124,14 @@ def video_size(path):
     return sum(v.stat().st_size for v in path.rglob("*") if v.is_file() and is_video(v))
 
 
+def newest_mtime(path):
+    """Nyeste endring av filene (ikke mappene – de endres også når vi pakker ut eller flytter)."""
+    if path.is_file():
+        return path.stat().st_mtime
+    times = [f.stat().st_mtime for f in path.rglob("*") if f.is_file()]
+    return max(times) if times else path.stat().st_mtime
+
+
 def disk_root(path):
     """Monteringspunktet (disken) en sti ligger på – vi flytter aldri mellom disker."""
     p = path.resolve()
@@ -139,7 +148,8 @@ def matching_subs(video):
 
 
 class Planner:
-    def __init__(self):
+    def __init__(self, min_age_minutes=0):
+        self.min_age = min_age_minutes * 60
         self.moves = []        # (kilde, mål, beskrivelse)
         self.skipped = []      # (sti, grunn)
         self.taken = set()     # mål som allerede er planlagt
@@ -215,6 +225,9 @@ class Planner:
     def plan(self, source):
         root = disk_root(source)
         for entry in sorted(source.iterdir()):
+            if self.min_age and time.time() - newest_mtime(entry) < self.min_age:
+                self.skipped.append((entry, "endret nylig – venter (lastes kanskje ned)"))
+                continue
             if entry.is_file():
                 self.plan_file(root, entry)
             elif entry.is_dir():
@@ -284,7 +297,7 @@ class Planner:
 def apply(moves, log_path):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     done = 0
-    with open(log_path, "w", encoding="utf-8") as log:
+    with open(log_path, "a", encoding="utf-8") as log:
         for src, dst, _ in moves:
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -324,6 +337,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mapper", nargs="*", type=Path, help="mapper som skal ryddes")
     parser.add_argument("--utfør", action="store_true", help="flytt filene (ellers bare visning)")
+    parser.add_argument("--min-alder", type=int, default=0, metavar="MINUTTER",
+                        help="hopp over ting som er endret de siste MINUTTER minuttene")
     parser.add_argument("--angre", type=Path, metavar="LOGG", help="angre en tidligere sortering")
     args = parser.parse_args()
 
@@ -333,7 +348,7 @@ def main():
     if not args.mapper:
         parser.error("oppgi minst én mappe")
 
-    planner = Planner()
+    planner = Planner(args.min_alder)
     for folder in args.mapper:
         if not folder.is_dir():
             sys.exit(f"Finner ikke mappen {folder}")
@@ -358,6 +373,8 @@ def main():
 
     if not args.utfør:
         print("\nDette var bare en visning – ingenting er flyttet. Legg til --utfør for å flytte.")
+        return
+    if not planner.moves:
         return
     log_path = (Path(__file__).resolve().parent.parent / "logs"
                 / f"sortering-{datetime.now():%Y%m%d-%H%M%S}.tsv")
