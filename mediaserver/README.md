@@ -210,6 +210,16 @@ Serier/
 
 Treffer Jellyfin feil film, kan du rette det via *⋯ → Identifiser* på filmen.
 
+**Rydde automatisk:** Ligger filmer og episoder løst og blandet, kan `sort-media.py`
+sortere dem inn i `Filmer/` og `Serier/` på samme disk. Den viser først hva den vil gjøre,
+flytter bare video (programmer, musikk o.l. blir liggende), sletter ingenting og kan angres:
+
+```bash
+./scripts/sort-media.py "/srv/media/disk1/Det siste nye"            # se hva som vil skje
+./scripts/sort-media.py --utfør "/srv/media/disk1/Det siste nye"    # flytt
+./scripts/sort-media.py --angre logs/sortering-<tidspunkt>.tsv      # angre
+```
+
 ## Vedlikehold
 
 ```bash
