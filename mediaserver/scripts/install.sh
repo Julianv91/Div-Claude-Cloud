@@ -22,7 +22,19 @@ sudo apt-get install -y ca-certificates curl
 
 if ! command -v docker >/dev/null; then
   echo "==> Installerer Docker"
-  curl -fsSL https://get.docker.com | sudo sh
+  . /etc/os-release
+  if [[ $ID == debian || $ID == ubuntu ]]; then
+    curl -fsSL https://get.docker.com | sudo sh
+  else
+    # Linux Mint, Pop!_OS, Zorin o.l. støttes ikke av get.docker.com –
+    # bruk Docker-pakkene fra distroens egne arkiver i stedet.
+    if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
+      compose_pkg=docker-compose-v2
+    else
+      compose_pkg=docker-compose
+    fi
+    sudo apt-get install -y docker.io "$compose_pkg"
+  fi
 fi
 sudo systemctl enable --now docker
 if ! id -nG "$USER" | grep -qw docker; then

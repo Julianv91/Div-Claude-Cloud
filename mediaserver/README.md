@@ -20,6 +20,40 @@ krever ingen konto og alt blir værende hjemme.
 
 ## 1. Installer Linux
 
+Du har to valg:
+
+- **A. Vanlig PC med skrivebord.** Maskinen kan brukes som en helt vanlig datamaskin
+  (nettleser, filer, se film på den direkte), og Jellyfin går i bakgrunnen.
+- **B. Ren server uten skrivebord.** Bruker litt mindre ressurser og styres fra en
+  annen PC over SSH.
+
+### A. Med skrivebord (enklest å komme i gang med)
+
+Bruk **Linux Mint 22** (føles mest som Windows) eller **Ubuntu Desktop 24.04 LTS**.
+
+1. Last ned ISO-filen fra [linuxmint.com](https://linuxmint.com/download.php)
+   (velg *Cinnamon Edition*) eller [ubuntu.com](https://ubuntu.com/download/desktop).
+2. Skriv den til en minnepinne (minst 8 GB) med [balenaEtcher](https://etcher.balena.io)
+   eller [Rufus](https://rufus.ie).
+3. Start maskinen fra minnepinnen. Trykk F12, F11, F7 eller Esc under oppstart for
+   oppstartsmenyen; tasten varierer mellom produsenter.
+4. Velg *Installer* og la installasjonen bruke **systemdisken**. **Pass på at du ikke
+   velger en av filmdiskene!** Det tryggeste er å koble fra filmdiskene under installasjonen.
+5. Når maskinen har startet, åpner du **Terminal** og fortsetter med steg 2 under.
+
+**To ting du må gjøre på en skrivebordsmaskin:**
+
+- **Slå av hvilemodus.** Ellers sovner maskinen og blir borte for de andre PC-ene.
+  Gå til *Innstillinger → Strømstyring* og sett «Hvilemodus» til *Aldri*. Skjermen kan
+  gjerne slå seg av. Vil du være helt sikker, kjør
+  `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
+- **Ikke åpne filmdiskene i filbehandleren før steg 3.** Skrivebordet monterer disker
+  automatisk under `/media/<bruker>/...`. `add-disk.sh` sier fra hvis disken allerede er
+  montert; da kjører du `sudo umount /dev/sdb1` (eller trykker «Løs ut» i
+  filbehandleren) og prøver igjen. Etterpå ligger diskene fast under `/srv/media`.
+
+### B. Uten skrivebord (server)
+
 Bruk **Debian 13** (anbefalt) eller **Ubuntu Server 24.04 LTS**.
 
 1. Last ned [Debian netinst](https://www.debian.org/distrib/netinst) og skriv den til en
@@ -113,6 +147,7 @@ Da husker Jellyfin hva hver enkelt har sett.
 | Enhet | Hvordan |
 |---|---|
 | PC (nettleser) | `http://<server-ip>:8096` |
+| Selve servermaskinen (med skrivebord) | `http://localhost:8096` |
 | PC (app) | [Jellyfin Media Player](https://github.com/jellyfin/jellyfin-media-player): spiller av flere formater direkte uten transkoding |
 | Android TV / Google TV / Fire TV | «Jellyfin» i app-butikken |
 | LG (webOS) | «Jellyfin» i LG Content Store |
