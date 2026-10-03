@@ -23,8 +23,19 @@ if ! command -v unrar >/dev/null; then
   exit 1
 fi
 
-video_re='\.(mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|mpg|mpeg)$'
-ok=0 skipped=0 failed=0
+video_ext='mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|mpg|mpeg'
+ok=0 already=0 skipped=0 failed=0
+
+delete_rars() {
+  find "$1" -maxdepth 1 -type f \( -iname '*.rar' -o -iregex '.*\.[rs][0-9][0-9]' \) -delete
+}
+
+# Skriver «størrelse<TAB>filnavn» for hver videofil i arkivet.
+list_videos() {
+  unrar lt "$1" 2>/dev/null | awk -v ext="$video_ext" '
+    /^ *Name: / { name = substr($0, index($0, ": ") + 2) }
+    /^ *Size: / { if (tolower(name) ~ ("\\.(" ext ")$")) print $2 "\t" name }' | sort -u
+}
 
 for top in "$@"; do
   top=${top%/}
@@ -37,26 +48,42 @@ for top in "$@"; do
     fi
     [[ -n $first ]] || continue
 
-    if ! unrar lb "$first" 2>/dev/null | grep -qiE "$video_re"; then
+    videos=$(list_videos "$first")
+    if [[ -z $videos ]]; then
+      # Reserve: navnelisten uten størrelser (da pakkes det alltid ut).
+      videos=$(unrar lb "$first" 2>/dev/null | grep -iE "\.($video_ext)$" | sed 's/^/?\t/' || true)
+    fi
+    if [[ -z $videos ]]; then
       echo "  hopper over (ingen video i arkivet): $name"
       skipped=$((skipped + 1))
       continue
     fi
 
+    # Er videoen allerede pakket ut (riktig størrelse)? Da trengs ikke arkivet lenger.
+    complete=1
+    while IFS=$'\t' read -r size file; do
+      [[ -f "$dir/$file" && $(stat -c %s "$dir/$file") == "$size" ]] || complete=0
+    done <<< "$videos"
+    if ((complete)); then
+      echo "  allerede pakket ut: $name"
+      already=$((already + 1))
+      if ((delete)); then delete_rars "$dir"; fi
+      continue
+    fi
+
     echo "==> Pakker ut: $name"
-    # -o- : overskriv aldri – trygt å kjøre flere ganger.
-    if unrar x -o- -idq "$first" "$dir/"; then
+    # -o+ : overskriv halvferdige filer fra tidligere forsøk.
+    if out=$(unrar x -o+ -idq "$first" "$dir/" 2>&1); then
       ok=$((ok + 1))
-      if ((delete)); then
-        find "$dir" -maxdepth 1 -type f \
-          \( -iname '*.rar' -o -iregex '.*\.[rs][0-9][0-9]' \) -delete
-      fi
+      if ((delete)); then delete_rars "$dir"; fi
     else
-      echo "  FEIL: kunne ikke pakke ut $name (ødelagt eller ufullstendig arkiv?)" >&2
+      rc=$?
+      reason=$(grep -v '^[[:space:]]*$' <<< "$out" | tail -n1)
+      echo "  FEIL ($rc): $name: ${reason:-ukjent feil}" >&2
       failed=$((failed + 1))
     fi
   done < <(find "$top" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 done
 
 echo
-echo "Ferdig: $ok pakket ut, $skipped hoppet over (ikke video), $failed feilet."
+echo "Ferdig: $ok pakket ut, $already var allerede pakket ut, $skipped hoppet over (ikke video), $failed feilet."
