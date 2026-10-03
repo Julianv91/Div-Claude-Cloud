@@ -74,6 +74,9 @@ def parse_episode(name):
                 show = f"{y.group('name')} ({y.group('year')})"
             season = int(m.groupdict().get("season") or 1)
             stem = None
+            if pattern is EPISODE_PATTERNS[2]:
+                e = m.group("episode")
+                stem = f"{name[:m.start('season')]}S{season:02d}E{e}{name[m.end('episode'):]}"
             if pattern is EPISODE_PATTERNS[3]:
                 stem = OF_PATTERN.sub(lambda o: f"S01E{int(o.group(1)):02d}", name, count=1)
             return Episode(show, season, stem)
