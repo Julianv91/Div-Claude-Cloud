@@ -220,6 +220,17 @@ flytter bare video (programmer, musikk o.l. blir liggende), sletter ingenting og
 ./scripts/sort-media.py --angre logs/sortering-<tidspunkt>.tsv      # angre
 ```
 
+Ligger noe pakket i RAR-filer (`.rar`, `.r00` …), pakk det ut først. Bare arkiver med video
+pakkes ut; `--slett-rar` fjerner RAR-filene etter vellykket utpakking:
+
+```bash
+sudo apt install -y unrar
+./scripts/unpack-rar.sh "/srv/media/disk1/Det siste nye"
+```
+
+Finnes samme film flere ganger, flytter `sort-media.py` den største versjonen og lister de
+andre som «dårligere kopi – kan slettes».
+
 ## Vedlikehold
 
 ```bash

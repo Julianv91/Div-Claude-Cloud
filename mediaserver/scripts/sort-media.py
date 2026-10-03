@@ -40,11 +40,18 @@ EPISODE_PATTERNS = [
     re.compile(rf"^(?P<show>.+?){SEP}+(?P<episode>\d{{1,2}})of\d{{1,2}}(?!\d)", re.I),
 ]
 MOVIE_PATTERN = re.compile(
-    r"^(?P<title>.+?)[ ._(\[\-]+(?P<year>19[2-9]\d|20[0-3]\d)(?=[ ._)\]\-]|$)")
+    r"^(?P<title>.+)[ ._(\[\-]+(?P<year>19[2-9]\d|20[0-3]\d)(?=[ ._)\]\-]|$)")
 OF_PATTERN = re.compile(r"(?<!\d)(\d{1,2})of\d{1,2}(?!\d)", re.I)
 SAMPLE_PATTERN = re.compile(r"(^|[ ._\-])sample([ ._\-]|$)", re.I)
 TRAILING_YEAR = re.compile(r"^(?P<name>.+?) (?P<year>19\d\d|20\d\d)$")
 SEASON_DIR = re.compile(r"^(season|sesong|s)\s*0*(?P<n>\d+)$", re.I)
+# Episodefil uten serienavn, f.eks. «S01E01 Rites of Passage.avi» – serien hentes fra mappen.
+BARE_EPISODE = re.compile(rf"^S(?P<season>\d{{1,2}}){SEP}?E\d{{1,3}}", re.I)
+# Sesongmappe, f.eks. «Vikings Season 1» eller «The.Wire.S02.720p.BluRay».
+SHOW_SEASON_DIR = re.compile(
+    rf"^(?P<show>.+?){SEP}+(?:season|sesong|S){SEP}*(?P<season>\d{{1,2}})(?!\d|{SEP}?E\d)", re.I)
+# Del 1/2 osv. – to ulike deler av samme tittel er ikke duplikater.
+PART_PATTERN = re.compile(rf"(?:^|{SEP})(?:part|pt|cd|disc|del){SEP}*(\d+|one|two|three|four|i{{1,3}}|iv)(?:{SEP}|$)", re.I)
 ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 
@@ -62,16 +69,20 @@ def key(name):
 Episode = namedtuple("Episode", "show season stem")
 
 
+def clean_show(raw):
+    show = clean_name(raw)
+    if show.islower():
+        show = show.title()
+    y = TRAILING_YEAR.match(show)
+    return f"{y.group('name')} ({y.group('year')})" if y else show
+
+
 def parse_episode(name):
+    """Episode, eller None. show er None når filnavnet ikke har serienavn (se BARE_EPISODE)."""
     for pattern in EPISODE_PATTERNS:
         m = pattern.match(name)
         if m:
-            show = clean_name(m.group("show"))
-            if show.islower():
-                show = show.title()
-            y = TRAILING_YEAR.match(show)
-            if y:
-                show = f"{y.group('name')} ({y.group('year')})"
+            show = clean_show(m.group("show"))
             season = int(m.groupdict().get("season") or 1)
             stem = None
             if pattern is EPISODE_PATTERNS[2]:
@@ -80,6 +91,17 @@ def parse_episode(name):
             if pattern is EPISODE_PATTERNS[3]:
                 stem = OF_PATTERN.sub(lambda o: f"S01E{int(o.group(1)):02d}", name, count=1)
             return Episode(show, season, stem)
+    if m := BARE_EPISODE.match(name):
+        return Episode(None, int(m.group("season")), None)
+    return None
+
+
+def dir_show(name):
+    """Serienavnet fra en mappe som «Barry.S01E02…» eller «Vikings Season 1»."""
+    if (ep := parse_episode(name)) and ep.show:
+        return ep
+    if m := SHOW_SEASON_DIR.match(name):
+        return Episode(clean_show(m.group("show")), int(m.group("season")), None)
     return None
 
 
@@ -93,6 +115,12 @@ def parse_movie(name):
 
 def is_video(path):
     return path.suffix.lower() in VIDEO_EXT and not SAMPLE_PATTERN.search(path.stem)
+
+
+def video_size(path):
+    if path.is_file():
+        return path.stat().st_size
+    return sum(v.stat().st_size for v in path.rglob("*") if v.is_file() and is_video(v))
 
 
 def disk_root(path):
@@ -117,21 +145,35 @@ class Planner:
         self.taken = set()     # mål som allerede er planlagt
         self.show_dirs = {}    # (disk, nøkkel) -> mappe for serien
         self.season_dirs = {}  # (seriemappe, sesong) -> mappe
+        self.movie_unit = {}   # kilde -> filmen den hører til (mappe eller videofil)
 
-    def drop_ambiguous_movies(self):
-        sources = {}
-        for src, dst, label in self.moves:
+    def resolve_duplicate_movies(self):
+        """Flere kopier av samme film: behold den største, la resten ligge.
+        Ulike deler (Part One/Two, CD1/CD2) er ikke kopier – da flyttes ingen av dem."""
+        units = {}
+        for src, _, label in self.moves:
             if label.startswith("FILM"):
-                sources.setdefault(label, set()).add(src if src.is_dir() else src.parent)
-        bad = {label for label, s in sources.items() if len(s) > 1}
-        for src, dst, label in self.moves:
-            if label in bad:
-                self.skipped.append((src, f"flere ting ville blitt «{label[7:]}» – sorter for hånd"))
-        self.moves = [m for m in self.moves if m[2] not in bad]
+                units.setdefault(label, set()).add(self.movie_unit[src])
+        drop = set()
+        for label, us in units.items():
+            if len(us) < 2:
+                continue
+            title = label[7:]
+            parts = {(m.group(1).lower() if (m := PART_PATTERN.search(u.name)) else None) for u in us}
+            if len(parts) > 1:
+                for u in sorted(us):
+                    self.skipped.append((u, f"flere deler ville blitt «{title}» – sorter for hånd"))
+                drop |= us
+                continue
+            best = max(us, key=video_size)
+            for u in sorted(us - {best}):
+                self.skipped.append((u, f"dårligere kopi av «{title}» – kan slettes"))
+                drop.add(u)
+        self.moves = [m for m in self.moves if self.movie_unit.get(m[0]) not in drop]
 
     def add(self, src, dst, label):
         if dst in self.taken and label.startswith("FILM"):
-            self.moves.append((src, dst, label))  # fanges opp av drop_ambiguous_movies()
+            self.moves.append((src, dst, label))  # fanges opp av resolve_duplicate_movies()
             return
         if dst.exists() or dst in self.taken:
             self.skipped.append((src, f"finnes allerede: {dst}"))
@@ -167,6 +209,7 @@ class Planner:
     def plan_movie_file(self, root, video, title):
         target = root / "Filmer" / title
         for f in [video, *matching_subs(video)]:
+            self.movie_unit[f] = video
             self.add(f, target / f.name, f"FILM   {title}")
 
     def plan(self, source):
@@ -182,7 +225,7 @@ class Planner:
             if entry.suffix.lower() not in SUB_EXT:
                 self.skipped.append((entry, "ikke en videofil"))
             return
-        if ep := parse_episode(entry.stem):
+        if (ep := parse_episode(entry.stem)) and ep.show:
             self.plan_episode_file(root, entry, ep)
         elif (title := parse_movie(entry.stem)) and entry.stat().st_size >= MIN_MOVIE_BYTES:
             self.plan_movie_file(root, entry, title)
@@ -202,19 +245,22 @@ class Planner:
         if not videos:
             files = [f for f in entry.rglob("*") if f.is_file()]
             if any(re.search(r"\.(rar|r\d\d)$", f.name, re.I) for f in files):
-                self.skipped.append((entry, "videoen er pakket i RAR-filer"))
+                self.skipped.append((entry, "RAR-arkiv – pakk ut med unpack-rar.sh hvis det er video"))
             elif not any(f.stat().st_size > 1024 * 1024 for f in files):
                 self.skipped.append((entry, "tom mappe / bare småfiler"))
             else:
                 self.skipped.append((entry, "ingen videofiler"))
             return
         dir_ep = parse_episode(entry.name)
+        folder = dir_show(entry.name)
         episodes = []
         for v in videos:
             ep = parse_episode(v.stem)
-            if ep and dir_ep:
-                ep = ep._replace(show=dir_ep.show)  # mappenavnet har som regel penest serienavn
-            elif dir_ep:
+            if ep and folder:
+                ep = ep._replace(show=folder.show)  # mappenavnet har som regel penest serienavn
+            elif ep and not ep.show:
+                ep = None  # «S01E01.avi» i en mappe uten serienavn
+            elif dir_ep and dir_ep.show:
                 # Filen mangler SxxEyy (f.eks. «x.mkv») – gi den mappens navn.
                 ep = dir_ep._replace(stem=dir_ep.stem or entry.name)
             episodes.append((v, ep))
@@ -229,6 +275,7 @@ class Planner:
         title = parse_movie(entry.name)
         if title and max(v.stat().st_size for v in videos) >= MIN_MOVIE_BYTES:
             # Filmmappe: hele mappen flyttes og får navnet «Tittel (År)».
+            self.movie_unit[entry] = entry
             self.add(entry, root / "Filmer" / title, f"FILM   {title}")
             return
         self.skipped.append((entry, "kjente ikke igjen mappen (allerede en seriemappe?)"))
@@ -291,7 +338,7 @@ def main():
         if not folder.is_dir():
             sys.exit(f"Finner ikke mappen {folder}")
         planner.plan(folder)
-    planner.drop_ambiguous_movies()
+    planner.resolve_duplicate_movies()
 
     label = None
     for src, dst, what in planner.moves:
