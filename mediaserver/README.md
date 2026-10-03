@@ -206,6 +206,10 @@ så nedlastinger som pågår ikke flyttes. Det som ikke gjenkjennes, blir liggen
 
 Se hva den har gjort: `journalctl -u mediaserver-autosort -n 50`
 
+**Tips:** Last ned til PC-ens egen disk først, og la nedlastingsprogrammet *flytte ferdige
+filer* til innboksen. Mange samtidige småskrivinger over nettverket til en vanlig harddisk
+går svært tregt; hele, ferdige filer går i full fart.
+
 ## Navngivning av filer
 
 Jellyfin finner riktig film/serie lettest med denne strukturen:
