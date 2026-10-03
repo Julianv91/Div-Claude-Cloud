@@ -32,6 +32,10 @@ SEP = r"[ ._\-]"
 EPISODE_PATTERNS = [
     re.compile(rf"^(?P<show>.+?){SEP}+S(?P<season>\d{{1,2}}){SEP}?E(?P<episode>\d{{1,3}})", re.I),
     re.compile(rf"^(?P<show>.+?){SEP}+(?P<season>\d{{1,2}})x(?P<episode>\d{{2,3}})(?!\d)", re.I),
+    # «fresh.off.the.boat.108.hdtv-lol» – sesong 1, episode 08.
+    re.compile(rf"^(?P<show>.+?){SEP}+(?P<season>[1-9])(?P<episode>\d{{2}})(?={SEP}"
+               r"(hdtv|pdtv|web|webrip|web-dl|proper|repack|internal|720p|1080p|xvid|x264|h264)\b)",
+               re.I),
     # «BBC.Wonders.of.Life.2of5.…» – miniserier uten sesongnummer.
     re.compile(rf"^(?P<show>.+?){SEP}+(?P<episode>\d{{1,2}})of\d{{1,2}}(?!\d)", re.I),
 ]
@@ -63,12 +67,14 @@ def parse_episode(name):
         m = pattern.match(name)
         if m:
             show = clean_name(m.group("show"))
+            if show.islower():
+                show = show.title()
             y = TRAILING_YEAR.match(show)
             if y:
                 show = f"{y.group('name')} ({y.group('year')})"
             season = int(m.groupdict().get("season") or 1)
             stem = None
-            if pattern is EPISODE_PATTERNS[2]:
+            if pattern is EPISODE_PATTERNS[3]:
                 stem = OF_PATTERN.sub(lambda o: f"S01E{int(o.group(1)):02d}", name, count=1)
             return Episode(show, season, stem)
     return None
@@ -109,7 +115,21 @@ class Planner:
         self.show_dirs = {}    # (disk, nøkkel) -> mappe for serien
         self.season_dirs = {}  # (seriemappe, sesong) -> mappe
 
+    def drop_ambiguous_movies(self):
+        sources = {}
+        for src, dst, label in self.moves:
+            if label.startswith("FILM"):
+                sources.setdefault(label, set()).add(src if src.is_dir() else src.parent)
+        bad = {label for label, s in sources.items() if len(s) > 1}
+        for src, dst, label in self.moves:
+            if label in bad:
+                self.skipped.append((src, f"flere ting ville blitt «{label[7:]}» – sorter for hånd"))
+        self.moves = [m for m in self.moves if m[2] not in bad]
+
     def add(self, src, dst, label):
+        if dst in self.taken and label.startswith("FILM"):
+            self.moves.append((src, dst, label))  # fanges opp av drop_ambiguous_movies()
+            return
         if dst.exists() or dst in self.taken:
             self.skipped.append((src, f"finnes allerede: {dst}"))
             return
@@ -177,7 +197,13 @@ class Planner:
             self.skipped.append((entry, f"kunne ikke leses ({e.strerror})"))
             return
         if not videos:
-            self.skipped.append((entry, "ingen videofiler"))
+            files = [f for f in entry.rglob("*") if f.is_file()]
+            if any(re.search(r"\.(rar|r\d\d)$", f.name, re.I) for f in files):
+                self.skipped.append((entry, "videoen er pakket i RAR-filer"))
+            elif not any(f.stat().st_size > 1024 * 1024 for f in files):
+                self.skipped.append((entry, "tom mappe / bare småfiler"))
+            else:
+                self.skipped.append((entry, "ingen videofiler"))
             return
         dir_ep = parse_episode(entry.name)
         episodes = []
@@ -262,6 +288,7 @@ def main():
         if not folder.is_dir():
             sys.exit(f"Finner ikke mappen {folder}")
         planner.plan(folder)
+    planner.drop_ambiguous_movies()
 
     label = None
     for src, dst, what in planner.moves:
