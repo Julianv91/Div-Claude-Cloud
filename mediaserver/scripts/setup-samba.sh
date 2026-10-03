@@ -44,6 +44,15 @@ if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   ufw allow samba
 fi
 
+# Advar om disker brukeren ikke kan skrive til (typisk ext4-disker formatert på en annen maskin).
+for dir in "$MEDIA_DIR"/*/; do
+  [[ -d $dir ]] || continue
+  if ! sudo -u "$user" test -w "$dir"; then
+    echo "Advarsel: $user kan ikke skrive til $dir. Rett det med:"
+    echo "  sudo chown -R $user: $dir"
+  fi
+done
+
 ip=$(hostname -I | awk '{print $1}')
 echo
 echo "Ferdig! Koble til fra Windows med \\\\${ip}\\media (bruker: $user)."

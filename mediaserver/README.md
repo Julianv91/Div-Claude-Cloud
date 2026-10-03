@@ -160,15 +160,38 @@ Appene finner serveren automatisk på hjemmenettet.
 *Kontrollpanel → Plugins → Katalog* og start Jellyfin på nytt. TV-en ser da serveren
 under kilder/media.
 
-## 7. (Valgfritt) Legg inn nye filmer fra PC-en
+## 7. Legg inn og styr filer fra en annen PC
+
+Med en nettverksdeling (Samba) ser diskene på serveren ut som en vanlig mappe på de
+andre PC-ene. Du kan kopiere inn nye filmer, lage mapper, gi nytt navn og slette,
+akkurat som på en lokal disk.
 
 ```bash
 sudo ./scripts/setup-samba.sh
 ```
 
-Du velger et passord. I Windows skriver du `\\<server-ip>\media` i Filutforsker,
-eller høyreklikker *Denne PC-en → Koble til nettverksstasjon*. Jellyfin oppdager nye
-filer automatisk.
+Du velger et eget Samba-passord. Alle diskene vises som undermapper (`disk1`, `disk2` …)
+i én felles deling som heter `media`.
+
+**Koble til:**
+
+| Fra | Hvordan |
+|---|---|
+| Windows | Filutforsker → skriv `\\<server-ip>\media` i adressefeltet. For en fast stasjonsbokstav: høyreklikk *Denne PC-en → Koble til nettverksstasjon*, velg for eksempel `M:` og kryss av for *Koble til på nytt ved pålogging* |
+| Mac | Finder → *Gå → Koble til tjener* (⌘K) → `smb://<server-ip>/media` |
+| Linux | Filbehandleren → *Andre steder* → `smb://<server-ip>/media` |
+
+Logg inn med brukernavnet ditt på serveren og Samba-passordet. Kryss av for
+«Husk passord».
+
+Jellyfin oppdager nye filer automatisk etter kort tid. Dukker ikke en film opp, kan
+du kjøre *Kontrollpanel → Biblioteker → Skann alle biblioteker*.
+
+**Tips:**
+- Store filmfiler går mye raskere over kabel enn over Wi-Fi.
+- Får du «ingen tilgang» når du skriver til en Linux-formatert disk (ext4), gi brukeren
+  din eierskap: `sudo chown -R $USER: /srv/media/disk1`. Skriptet advarer om dette.
+- Jellyfin selv har bare lesetilgang til diskene, så den kan aldri slette filmene dine.
 
 ## Navngivning av filer
 
