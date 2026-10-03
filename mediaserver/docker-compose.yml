@@ -1,0 +1,24 @@
+# Jellyfin mediaserver. Verdiene under hentes fra .env (lages av scripts/install.sh).
+# Har maskinen Intel/AMD-grafikk, legger install.sh i tillegg til
+# docker-compose.override.yml (kopi av hwaccel.override.yml) for maskinvare-transkoding.
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    # Host-nettverk gjør at klienter og TV-er på hjemmenettet finner serveren automatisk.
+    network_mode: host
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - TZ=${TZ:-Europe/Oslo}
+    volumes:
+      - ./config:/config
+      - ./cache:/cache
+      # Alle mediediskene ligger under /srv/media/<navn> og vises som /media/<navn>.
+      # rslave gjør at disker som monteres etter at Jellyfin har startet også blir synlige.
+      - type: bind
+        source: ${MEDIA_DIR:-/srv/media}
+        target: /media
+        read_only: true
+        bind:
+          propagation: rslave

@@ -1,0 +1,8 @@
+# Maskinvare-transkoding (Intel QuickSync / VAAPI, også AMD).
+# install.sh kopierer denne til docker-compose.override.yml når /dev/dri finnes.
+services:
+  jellyfin:
+    group_add:
+      - "${RENDER_GID:-105}"
+    devices:
+      - /dev/dri:/dev/dri

@@ -1,0 +1,179 @@
+# Hjemmekino med Jellyfin
+
+Et lite oppsett for å dele filmer og serier på hjemmenettet. Det fungerer omtrent
+som Plex, men er basert på [Jellyfin](https://jellyfin.org): gratis, åpen kildekode,
+krever ingen konto og alt blir værende hjemme.
+
+```
+ Harddisker ──► /srv/media/disk1, disk2 ──► Jellyfin (Docker) ──► PC-er (nettleser / app)
+                                                              └──► TV (app eller DLNA)
+```
+
+| Fil | Hva den gjør |
+|---|---|
+| `scripts/add-disk.sh` | Monterer en harddisk fast under `/srv/media/<navn>` (uten å formatere) |
+| `scripts/install.sh` | Installerer Docker og starter Jellyfin, og skrur på maskinvare-transkoding når det er mulig |
+| `scripts/setup-samba.sh` | Valgfritt: deler mappen på nettet, så du kan kopiere inn nye filmer fra PC-ene |
+| `docker-compose.yml` | Selve Jellyfin-tjenesten |
+
+---
+
+## 1. Installer Linux
+
+Bruk **Debian 13** (anbefalt) eller **Ubuntu Server 24.04 LTS**.
+
+1. Last ned [Debian netinst](https://www.debian.org/distrib/netinst) og skriv den til en
+   minnepinne med [balenaEtcher](https://etcher.balena.io) eller Rufus.
+2. Installer på systemdisken, **ikke** på filmdiskene.
+3. Fjern krysset for skrivebordsmiljø under programvarevalg. Kryss av for
+   **SSH server** og **standard system utilities**.
+4. Lag en vanlig bruker (for eksempel `julian`). Gi den sudo-tilgang hvis installasjonen
+   ikke gjorde det: `su -c "usermod -aG sudo julian"`, og logg ut og inn igjen.
+
+Etter installasjonen kan du koble fra skjerm og tastatur og styre maskinen fra
+PC-en med `ssh julian@<ip-adresse>`.
+
+> **Tips:** Gi serveren en fast IP-adresse ved å lage en *DHCP-reservasjon* i
+> ruteren. Da endrer ikke adressen seg.
+
+## 2. Hent dette oppsettet
+
+```bash
+sudo apt install -y git
+git clone https://github.com/julianv91/div-claude-cloud.git
+cd div-claude-cloud/mediaserver
+```
+
+(Er repoet privat, trenger du en GitHub-token som passord. Du kan også kopiere
+`mediaserver`-mappen over med `scp -r`.)
+
+## 3. Koble til harddiskene
+
+Koble til diskene og finn partisjonene:
+
+```bash
+lsblk -f
+```
+
+Se etter de store partisjonene (for eksempel `sdb1` med `ntfs` og 4T). Monter hver av dem
+med et kort navn:
+
+```bash
+sudo ./scripts/add-disk.sh /dev/sdb1 disk1
+sudo ./scripts/add-disk.sh /dev/sdc1 disk2
+```
+
+Skriptet **formaterer ingenting**. Det legger disken inn i `/etc/fstab` (via UUID, så
+rekkefølgen på USB-portene ikke spiller noen rolle) og monterer den. Maskinen starter
+normalt selv om en disk mangler.
+
+Disker fra Windows (NTFS) fungerer fint, både for lesing og skriving. Nekter en
+NTFS-disk å montere, ble den ikke lukket riktig i Windows. Koble den til Windows igjen,
+slå av *Rask oppstart* og velg *Løs ut* før du flytter den.
+
+## 4. Installer og start Jellyfin
+
+```bash
+./scripts/install.sh
+```
+
+Skriptet installerer Docker og lager `.env`. Har maskinen Intel- eller AMD-grafikk,
+skrur det på maskinvare-transkoding, og så starter det Jellyfin. Til slutt skriver
+det ut adressen, for eksempel `http://192.168.1.50:8096`.
+
+## 5. Første gangs oppsett i nettleseren
+
+Åpne adressen fra en PC og følg veiviseren:
+
+1. Velg språk og lag en administrator-bruker.
+2. **Legg til mediebibliotek:**
+   - *Filmer*: innholdstype **Movies**, mapper `/media/disk1/Filmer` (og `/media/disk2/...`)
+   - *Serier*: innholdstype **Shows**, mapper `/media/disk1/Serier` osv.
+
+   Ett bibliotek kan hente fra flere disker.
+3. Sett metadataspråk til norsk (eller engelsk) og land til Norge.
+4. Fullfør. Jellyfin skanner diskene og henter plakater, beskrivelser og så videre.
+
+**Maskinvare-transkoding** (hvis install.sh fant `/dev/dri`):
+Gå til *Kontrollpanel → Avspilling → Transkoding*.
+
+- Intel: velg **Intel QuickSync (QSV)** og kryss av for kodekene under
+  *Aktiver maskinvaredekoding*. På nyere Intel (N100/N150, 12. gen og nyere) kan du
+  også slå på *Low-Power*-koderne.
+- AMD: velg **VAAPI**.
+
+Maskinvare-transkoding trengs bare når en klient ikke kan spille av filen direkte.
+PC-er med nettleser klarer som regel det meste uten.
+
+Lag gjerne egne brukere til hver i familien under *Kontrollpanel → Brukere*.
+Da husker Jellyfin hva hver enkelt har sett.
+
+## 6. Se på film
+
+| Enhet | Hvordan |
+|---|---|
+| PC (nettleser) | `http://<server-ip>:8096` |
+| PC (app) | [Jellyfin Media Player](https://github.com/jellyfin/jellyfin-media-player): spiller av flere formater direkte uten transkoding |
+| Android TV / Google TV / Fire TV | «Jellyfin» i app-butikken |
+| LG (webOS) | «Jellyfin» i LG Content Store |
+| Samsung (Tizen) | Sjekk app-butikken. Ellers fungerer DLNA (se under) eller en billig Google TV-dongle |
+| Mobil | Jellyfin-appen (iOS/Android) |
+
+Appene finner serveren automatisk på hjemmenettet.
+
+**DLNA** (for TV-er uten Jellyfin-app): Installer *DLNA*-pluginen under
+*Kontrollpanel → Plugins → Katalog* og start Jellyfin på nytt. TV-en ser da serveren
+under kilder/media.
+
+## 7. (Valgfritt) Legg inn nye filmer fra PC-en
+
+```bash
+sudo ./scripts/setup-samba.sh
+```
+
+Du velger et passord. I Windows skriver du `\\<server-ip>\media` i Filutforsker,
+eller høyreklikker *Denne PC-en → Koble til nettverksstasjon*. Jellyfin oppdager nye
+filer automatisk.
+
+## Navngivning av filer
+
+Jellyfin finner riktig film/serie lettest med denne strukturen:
+
+```
+Filmer/
+  Inception (2010)/
+    Inception (2010).mkv
+    Inception (2010).no.srt        ← undertekster
+Serier/
+  Lilyhammer (2012)/
+    Season 01/
+      Lilyhammer S01E01.mkv
+```
+
+Treffer Jellyfin feil film, kan du rette det via *⋯ → Identifiser* på filmen.
+
+## Vedlikehold
+
+```bash
+cd ~/div-claude-cloud/mediaserver
+
+docker compose pull && docker compose up -d   # oppdater Jellyfin
+docker compose logs -f                        # se loggen
+docker compose restart                        # start på nytt
+sudo apt update && sudo apt upgrade           # oppdater Linux
+```
+
+Automatiske sikkerhetsoppdateringer for Linux:
+`sudo apt install unattended-upgrades && sudo dpkg-reconfigure unattended-upgrades`.
+
+Ta gjerne backup av `config/`-mappen. Der ligger brukere, hva som er sett og
+bibliotekoppsettet. Selve filmene ligger urørt på diskene dine.
+
+## Feilsøking
+
+| Problem | Løsning |
+|---|---|
+| `docker: permission denied` | Logg ut og inn igjen (du ble lagt til i docker-gruppen), eller bruk `sudo` |
+| Bibliotek er tomt | Sjekk at disken er montert: `findmnt /srv/media/disk1`. Inne i Jellyfin heter stien `/media/disk1` |
+| Hakker under avspilling | *Kontrollpanel → Aktivitet* viser om den transkoder. Slå på maskinvare-transkoding, eller bruk Jellyfin Media Player |
+| Finner ikke serveren på TV-en | Sjekk at TV og server er på samme nett (ikke gjestenett) |
