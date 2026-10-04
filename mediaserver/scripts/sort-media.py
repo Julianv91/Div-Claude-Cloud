@@ -19,7 +19,7 @@ import os
 import re
 import sys
 import time
-from collections import namedtuple
+from collections import Counter, namedtuple
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +54,26 @@ SHOW_SEASON_DIR = re.compile(
 # Del 1/2 osv. – to ulike deler av samme tittel er ikke duplikater.
 PART_PATTERN = re.compile(rf"(?:^|{SEP})(?:part|pt|cd|disc|del){SEP}*(\d+|one|two|three|four|i{{1,3}}|iv)(?:{SEP}|$)", re.I)
 ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*]')
+# Undertekstmapper i nedlastinger, f.eks. «Subs/South.Park.S20E01…/2_English.srt».
+SUBS_DIR = re.compile(r"^(subs?|subtitles?|undertekster)$", re.I)
+EP_KEY = re.compile(r"S(\d{1,2})[ ._\-]?E(\d{1,3})", re.I)
+# Språknavn/-koder i undertekstfilnavn -> koden Jellyfin forstår.
+LANG_CODES = {
+    "english": "en", "eng": "en", "en": "en",
+    "norwegian": "no", "norsk": "no", "nor": "no", "nob": "no", "nb": "no", "no": "no",
+    "swedish": "sv", "svenska": "sv", "swe": "sv", "sv": "sv",
+    "danish": "da", "dansk": "da", "dan": "da", "da": "da",
+    "finnish": "fi", "fin": "fi", "fi": "fi",
+    "german": "de", "ger": "de", "deu": "de", "de": "de",
+    "french": "fr", "fre": "fr", "fra": "fr", "fr": "fr",
+    "spanish": "es", "spa": "es", "es": "es",
+    "italian": "it", "ita": "it", "it": "it",
+    "dutch": "nl", "dut": "nl", "nld": "nl", "nl": "nl",
+    "portuguese": "pt", "por": "pt", "pt": "pt",
+    "polish": "pl", "pol": "pl", "pl": "pl",
+    "russian": "ru", "rus": "ru", "ru": "ru",
+    "icelandic": "is", "ice": "is", "isl": "is",
+}
 
 
 def clean_name(raw):
@@ -142,6 +162,51 @@ def disk_root(path):
     return p
 
 
+def ep_key(text):
+    m = EP_KEY.search(text)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def subs_dirs(video, top):
+    """Subs-mapper i videoens mappe og hver mappe over den, til og med top."""
+    d = video.parent
+    while True:
+        if d.is_dir():
+            yield from (s for s in sorted(d.iterdir()) if s.is_dir() and SUBS_DIR.match(s.name))
+        if d == top or d == d.parent:
+            return
+        d = d.parent
+
+
+def folder_subs(video, top, key_v, single):
+    """Undertekster i Subs-mapper som hører til videoen: samme SxxEyy i filnavnet eller
+    undermappen, eller – når det bare er én video i nedlastingen – undertekster uten SxxEyy."""
+    found = []
+    for d in subs_dirs(video, top):
+        for s in sorted(d.rglob("*")):
+            if not (s.is_file() and s.suffix.lower() in SUB_EXT):
+                continue
+            k = ep_key(s.stem) or ep_key(str(s.parent.relative_to(d)))
+            if (k is not None and k == key_v) or (k is None and single):
+                found.append(s)
+    return found
+
+
+def sub_tags(sub, video_stem):
+    """[språk, sdh, forced] fra f.eks. «2_English.srt» eller «Episode.eng.forced.srt»."""
+    stem = sub.stem
+    rest = stem[len(video_stem):] if stem.lower().startswith(video_stem.lower()) else stem
+    tokens = [t.lower() for t in re.split(r"[ ._\-\[\]()]+", rest) if t]
+    flags = [t for t in tokens if t in ("sdh", "cc", "forced")]
+    words = [t for t in tokens if t not in flags]
+    tags = [LANG_CODES[words[-1]]] if words and words[-1] in LANG_CODES else []
+    if {"sdh", "cc"} & set(flags):
+        tags.append("sdh")
+    if "forced" in flags:
+        tags.append("forced")
+    return tags
+
+
 def matching_subs(video):
     return [s for s in video.parent.iterdir()
             if s.is_file() and s.suffix.lower() in SUB_EXT and s.name.startswith(video.stem)]
@@ -155,15 +220,15 @@ class Planner:
         self.taken = set()     # mål som allerede er planlagt
         self.show_dirs = {}    # (disk, nøkkel) -> mappe for serien
         self.season_dirs = {}  # (seriemappe, sesong) -> mappe
-        self.movie_unit = {}   # kilde -> filmen den hører til (mappe eller videofil)
+        self.movie_unit = {}   # (kilde, mål) -> filmen flyttingen hører til (mappe eller videofil)
 
     def resolve_duplicate_movies(self):
         """Flere kopier av samme film: behold den største, la resten ligge.
         Ulike deler (Part One/Two, CD1/CD2) er ikke kopier – da flyttes ingen av dem."""
         units = {}
-        for src, _, label in self.moves:
+        for src, dst, label in self.moves:
             if label.startswith("FILM"):
-                units.setdefault(label, set()).add(self.movie_unit[src])
+                units.setdefault(label, set()).add(self.movie_unit[src, dst])
         drop = set()
         for label, us in units.items():
             if len(us) < 2:
@@ -179,9 +244,11 @@ class Planner:
             for u in sorted(us - {best}):
                 self.skipped.append((u, f"dårligere kopi av «{title}» – kan slettes"))
                 drop.add(u)
-        self.moves = [m for m in self.moves if self.movie_unit.get(m[0]) not in drop]
+        self.moves = [m for m in self.moves if self.movie_unit.get(m[:2]) not in drop]
 
-    def add(self, src, dst, label):
+    def add(self, src, dst, label, unit=None):
+        if unit is not None:
+            self.movie_unit[src, dst] = unit
         if dst in self.taken and label.startswith("FILM"):
             self.moves.append((src, dst, label))  # fanges opp av resolve_duplicate_movies()
             return
@@ -190,6 +257,22 @@ class Planner:
             return
         self.taken.add(dst)
         self.moves.append((src, dst, label))
+
+    def plan_subs(self, subs, target_dir, new_stem, old_stem, label, unit=None, src_of=None):
+        """Flytt undertekster til target_dir med navn Jellyfin kjenner igjen:
+        «<video>.en.srt», «<video>.en.sdh.srt», «<video>.2.en.srt» …"""
+        groups = {}
+        for sub in subs:  # .idx/.sub hører sammen og må få samme navn
+            groups.setdefault((sub.parent, sub.stem), []).append(sub)
+        for files in groups.values():
+            tags = sub_tags(files[0], old_stem)
+            for n in range(1, 100):
+                base = ".".join([new_stem] + ([str(n)] if n > 1 else []) + tags)
+                dsts = [target_dir / (base + f.suffix.lower()) for f in files]
+                if not any(d.exists() or d in self.taken for d in dsts):
+                    break
+            for f, d in zip(files, dsts):
+                self.add(src_of(f) if src_of else f, d, label, unit)
 
     def show_dir(self, root, show):
         series = root / "Serier"
@@ -209,18 +292,22 @@ class Planner:
             self.season_dirs[k] = match or show_dir / f"Season {season:02d}"
         return self.season_dirs[k]
 
-    def plan_episode_file(self, root, video, ep):
+    def plan_episode_file(self, root, video, ep, top=None, single=False):
         show_dir = self.show_dir(root, ep.show)
         target = self.season_dir(show_dir, ep.season)
+        label = f"SERIE  {show_dir.name} – sesong {ep.season}"
         for f in [video, *matching_subs(video)]:
             name = ep.stem + f.name[len(video.stem):] if ep.stem else f.name
-            self.add(f, target / name, f"SERIE  {show_dir.name} – sesong {ep.season}")
+            self.add(f, target / name, label)
+        if top is not None:
+            new_stem = ep.stem or video.stem
+            subs = folder_subs(video, top, ep_key(new_stem), single)
+            self.plan_subs(subs, target, new_stem, video.stem, label)
 
     def plan_movie_file(self, root, video, title):
         target = root / "Filmer" / title
         for f in [video, *matching_subs(video)]:
-            self.movie_unit[f] = video
-            self.add(f, target / f.name, f"FILM   {title}")
+            self.add(f, target / f.name, f"FILM   {title}", unit=video)
 
     def plan(self, source):
         root = disk_root(source)
@@ -281,17 +368,45 @@ class Planner:
             # Episoder i en nedlastings- eller seriemappe: flytt videofilene, resten blir liggende.
             for v, ep in episodes:
                 if ep:
-                    self.plan_episode_file(root, v, ep)
+                    self.plan_episode_file(root, v, ep, entry, single=len(videos) == 1)
                 else:
                     self.skipped.append((v, "kjente ikke igjen navnet"))
             return
         title = parse_movie(entry.name)
         if title and max(v.stat().st_size for v in videos) >= MIN_MOVIE_BYTES:
             # Filmmappe: hele mappen flyttes og får navnet «Tittel (År)».
-            self.movie_unit[entry] = entry
-            self.add(entry, root / "Filmer" / title, f"FILM   {title}")
+            target = root / "Filmer" / title
+            label = f"FILM   {title}"
+            self.add(entry, target, label, unit=entry)
+            if self.moves and self.moves[-1][0] == entry:
+                # Undertekster i Subs-mappen legges ved siden av filmen (etter at mappen er flyttet).
+                main = max(videos, key=lambda v: v.stat().st_size)
+                subs = folder_subs(main, entry, None, True)
+                self.plan_subs(subs, target / main.parent.relative_to(entry), main.stem, main.stem,
+                               label, unit=entry, src_of=lambda f: target / f.relative_to(entry))
             return
         self.skipped.append((entry, "kjente ikke igjen mappen (allerede en seriemappe?)"))
+
+
+def plan_subs_from_logs(planner, logs):
+    """Hent undertekster fra Subs-mappene i de opprinnelige nedlastingsmappene til filer
+    som allerede er sortert (ifølge sorteringsloggene)."""
+    lines = [(Path(a), Path(b)) for log in logs for l in open(log, encoding="utf-8")
+             if l.strip() for a, b in [l.rstrip("\n").split("\t")]]
+    per_folder = Counter(src.parent for src, _ in lines if is_video(src))
+    for src, dst in lines:
+        if not dst.exists():
+            continue
+        if dst.is_dir():  # en flyttet filmmappe
+            videos = [v for v in dst.rglob("*") if v.is_file() and is_video(v)]
+            if videos:
+                main = max(videos, key=lambda v: v.stat().st_size)
+                subs = folder_subs(main, dst, None, True)
+                planner.plan_subs(subs, main.parent, main.stem, main.stem, f"UNDERTEKST  {dst.name}")
+        elif is_video(dst) and src.parent.is_dir():
+            subs = folder_subs(src, src.parent, ep_key(dst.stem), per_folder[src.parent] == 1)
+            planner.plan_subs(subs, dst.parent, dst.stem, src.stem,
+                              f"UNDERTEKST  {dst.parent.parent.name} – {dst.parent.name}")
 
 
 def apply(moves, log_path):
@@ -324,7 +439,7 @@ def undo(log_path):
         os.rename(dst, src)
         restored += 1
         # Rydd bort mapper skriptet laget og som nå er tomme.
-        for d in (dst.parent, dst.parent.parent):
+        for d in (dst.parent, dst.parent.parent, dst.parent.parent.parent):
             try:
                 d.rmdir()
             except OSError:
@@ -340,20 +455,24 @@ def main():
     parser.add_argument("--min-alder", type=int, default=0, metavar="MINUTTER",
                         help="hopp over ting som er endret de siste MINUTTER minuttene")
     parser.add_argument("--angre", type=Path, metavar="LOGG", help="angre en tidligere sortering")
+    parser.add_argument("--undertekster-fra-logg", type=Path, nargs="+", metavar="LOGG",
+                        help="hent undertekster fra Subs-mapper for det som allerede er sortert")
     args = parser.parse_args()
 
     if args.angre:
         undo(args.angre)
         return
-    if not args.mapper:
-        parser.error("oppgi minst én mappe")
-
     planner = Planner(args.min_alder)
-    for folder in args.mapper:
-        if not folder.is_dir():
-            sys.exit(f"Finner ikke mappen {folder}")
-        planner.plan(folder)
-    planner.resolve_duplicate_movies()
+    if args.undertekster_fra_logg:
+        plan_subs_from_logs(planner, args.undertekster_fra_logg)
+    else:
+        if not args.mapper:
+            parser.error("oppgi minst én mappe")
+        for folder in args.mapper:
+            if not folder.is_dir():
+                sys.exit(f"Finner ikke mappen {folder}")
+            planner.plan(folder)
+        planner.resolve_duplicate_movies()
 
     label = None
     for src, dst, what in planner.moves:
@@ -366,9 +485,10 @@ def main():
         for path, reason in planner.skipped:
             print(f"    {path}  ({reason})")
 
-    films = len({d for _, d, w in planner.moves if w.startswith("FILM")})
+    films = len({planner.movie_unit[s, d] for s, d, w in planner.moves if w.startswith("FILM")})
     episodes = sum(1 for s, _, w in planner.moves if w.startswith("SERIE") and is_video(s))
-    print(f"\nTotalt: {films} filmer og {episodes} episoder blir sortert, "
+    subs = sum(1 for s, _, _ in planner.moves if s.suffix.lower() in SUB_EXT)
+    print(f"\nTotalt: {films} filmer, {episodes} episoder og {subs} undertekster blir flyttet, "
           f"{len(planner.skipped)} ting blir liggende.")
 
     if not args.utfør:

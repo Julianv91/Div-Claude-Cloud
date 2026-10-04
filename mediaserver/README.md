@@ -248,6 +248,16 @@ sudo apt install -y unrar
 Finnes samme film flere ganger, flytter `sort-media.py` den største versjonen og lister de
 andre som «dårligere kopi – kan slettes».
 
+Undertekster følger med: både de som ligger ved siden av videoen og de i en `Subs`-mappe
+(f.eks. `Subs/<episode>/2_English.srt`). De får navn Jellyfin forstår, som
+`<video>.en.srt`. For ting som allerede er sortert, kan undertekstene hentes i ettertid så
+lenge de gamle nedlastingsmappene finnes:
+
+```bash
+./scripts/sort-media.py --undertekster-fra-logg logs/*.tsv            # se hva som vil skje
+./scripts/sort-media.py --undertekster-fra-logg logs/*.tsv --utfør    # flytt
+```
+
 ## Vedlikehold
 
 ```bash
