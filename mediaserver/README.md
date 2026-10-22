@@ -210,6 +210,32 @@ Se hva den har gjort: `journalctl -u mediaserver-autosort -n 50`
 filer* til innboksen. Mange samtidige småskrivinger over nettverket til en vanlig harddisk
 går svært tregt; hele, ferdige filer går i full fart.
 
+## 9. (Valgfritt) Eksternt skrivebord – styr serveren uten skjerm
+
+Gir Mint-skrivebordet i et vindu på Windows via den innebygde «Tilkobling til eksternt
+skrivebord» (`mstsc`):
+
+```bash
+sudo apt install -y xrdp
+sudo adduser xrdp ssl-cert
+cat > ~/.xsession <<'EOF'
+export XDG_SESSION_DESKTOP=cinnamon
+export XDG_CURRENT_DESKTOP=X-Cinnamon
+export XDG_SESSION_TYPE=x11
+exec cinnamon-session
+EOF
+chmod +x ~/.xsession
+sudo systemctl enable --now xrdp
+```
+
+- Slå av automatisk pålogging (Meny → *Påloggingsvindu* → *Brukere*, tøm brukernavnet), og
+  vær **logget ut** på selve maskinen – ellers lukker den eksterne økten seg med en gang.
+- Brukernavnet er `julian` med liten forbokstav; velg økt **Xorg**.
+- Påloggingsskjermen bruker amerikansk tastatur – tegn som `æøå@"` i passordet kan bli feil.
+- Feilsøking: `sudo tail -n 20 /var/log/xrdp-sesman.log` og `tail -n 25 ~/.xsession-errors`.
+- For maskin uten skjerm: sett *Restore on AC Power Loss → Power On* i BIOS, og slå av
+  stopp ved manglende tastatur.
+
 ## Navngivning av filer
 
 Jellyfin finner riktig film/serie lettest med denne strukturen:
